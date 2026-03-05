@@ -1,7 +1,6 @@
 # Node
 node_modules/
 dist/
-.env
 .DS_Store
 
 # Python
@@ -16,7 +15,7 @@ venv/
 # ML/Data
 *.csv
 !solar_telemetry_data.csv
-*.json
+json
 !solar_failure_model.json
 !feature_meta.json
 

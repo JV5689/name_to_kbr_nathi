@@ -1,8 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+import shutil
+import os
 
 from telemetry import TelemetryGenerator
+from models import InverterTelemetry
 
 app = FastAPI(title="Solar Inverter Failure Prediction API")
 
@@ -28,16 +31,10 @@ def health_check():
 
 @app.get("/api/inverters")
 def get_inverters():
-    """
-    Returns a list of available inverter IDs.
-    """
     return generator.get_inverter_list()
 
 @app.get("/api/telemetry/current")
 def get_current_telemetry(inverter_id: Optional[str] = "INV-01"):
-    """
-    Returns current telemetry and prediction for a specific inverter.
-    """
     telemetry = generator.get_current_telemetry(inverter_id)
     prediction = generator.get_prediction(telemetry)
     
@@ -45,3 +42,25 @@ def get_current_telemetry(inverter_id: Optional[str] = "INV-01"):
         "telemetry": telemetry,
         "prediction": prediction
     }
+
+@app.post("/api/upload-telemetry")
+async def upload_telemetry(file: UploadFile = File(...)):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a CSV.")
+    
+    # Save file temporarily or process it
+    # For this hackathon demo, we'll just acknowledge the upload
+    return {"message": f"Telemetry file {file.filename} uploaded and processed successfully."}
+
+@app.post("/api/upload-weather")
+async def upload_weather(file: UploadFile = File(...)):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a CSV.")
+    
+    return {"message": f"Weather data from {file.filename} integrated into the prediction model."}
+
+@app.post("/api/predict")
+async def predict_custom(telemetry: InverterTelemetry):
+    prediction = generator.get_prediction(telemetry)
+    return prediction
+

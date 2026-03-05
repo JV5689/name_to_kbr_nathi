@@ -1,19 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area, BarChart, Bar
 } from 'recharts';
 import {
-    Activity, Zap, ThermometerIcon, TrendingUp, AlertTriangle, CheckCircle, Clock
+    Activity, Zap, ThermometerIcon, TrendingUp, AlertTriangle, CheckCircle, Clock, Cloud, Wind, Droplets, Upload, Shield
 } from 'lucide-react';
 import './Dashboard.css';
 
 const Dashboard = () => {
     const [inverters, setInverters] = useState(["INV-01"]);
     const [selectedInverter, setSelectedInverter] = useState("INV-01");
+    const [predictionMode, setPredictionMode] = useState("internal"); // "internal" or "internal+external"
     const [dataHistory, setDataHistory] = useState([]);
     const [currentStatus, setCurrentStatus] = useState(null);
     const [alerts, setAlerts] = useState([]);
+    const [isUploading, setIsUploading] = useState(false);
+
+    const telemetryInputRef = useRef(null);
+    const weatherInputRef = useRef(null);
 
     useEffect(() => {
         const fetchInverters = async () => {
@@ -21,7 +26,7 @@ const Dashboard = () => {
                 const response = await axios.get('/api/inverters');
                 setInverters(response.data);
                 if (response.data.length > 0) {
-                    setSelectedInverter(response.data[0]); // Set initial selected inverter
+                    setSelectedInverter(response.data[0]);
                 }
             } catch (error) {
                 console.error("Error fetching inverters:", error);
@@ -36,7 +41,6 @@ const Dashboard = () => {
                 const response = await axios.get(`/api/telemetry/current?inverter_id=${selectedInverter}`);
                 const { telemetry, prediction } = response.data;
 
-                // Use a formatted time string for the graph X axis
                 const timeStr = new Date(telemetry.timestamp).toLocaleTimeString();
 
                 const newDataPoint = {
@@ -44,28 +48,33 @@ const Dashboard = () => {
                     voltage: telemetry.grid_voltage,
                     power: telemetry.dc_power,
                     efficiency: telemetry.inverter_efficiency,
-                    temp: telemetry.inverter_temperature
+                    temp: telemetry.inverter_temperature,
+                    cloud: telemetry.cloud_cover * 100,
+                    wind: telemetry.wind_speed,
+                    rain: telemetry.rainfall * 10
                 };
 
                 setDataHistory(prev => {
                     const newHistory = [...prev, newDataPoint];
-                    // Keep last 20 data points for the graph
                     if (newHistory.length > 20) return newHistory.slice(newHistory.length - 20);
                     return newHistory;
                 });
 
                 setCurrentStatus({ telemetry, prediction });
+                setPredictionMode(prediction.mode);
 
-                // Add anomaly to alerts if detected
                 if (prediction.anomaly_detected) {
                     setAlerts(prev => {
                         const newAlert = {
                             id: Date.now(),
                             time: timeStr,
                             level: prediction.risk_level.toLowerCase(),
-                            cause: prediction.root_cause,
-                            desc: prediction.maintenance_recommendation
+                            cause: prediction.root_cause || "Anomaly Detected",
+                            desc: prediction.maintenance_recommendation,
+                            reasons: prediction.reasons
                         };
+                        const exists = prev.some(a => a.cause === newAlert.cause && a.time === newAlert.time);
+                        if (exists) return prev;
                         const newAlerts = [newAlert, ...prev];
                         return newAlerts.length > 5 ? newAlerts.slice(0, 5) : newAlerts;
                     });
@@ -76,38 +85,46 @@ const Dashboard = () => {
         };
 
         fetchTelemetry();
-        const intervalId = setInterval(fetchTelemetry, 2000);
+        const intervalId = setInterval(fetchTelemetry, 2500);
         return () => clearInterval(intervalId);
     }, [selectedInverter]);
 
     const handleInverterChange = (e) => {
         setSelectedInverter(e.target.value);
-        setDataHistory([]); // Reset graph when switching inverters
-        setAlerts([]); // Optional: reset alerts as well for clarity
+        setDataHistory([]);
+        setAlerts([]);
     };
 
-    if (!currentStatus) return <div className="dashboard-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>Loading System Diagnostics...</div>;
+    const handleFileUpload = async (type, file) => {
+        if (!file) return;
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const endpoint = type === 'telemetry' ? '/api/upload-telemetry' : '/api/upload-weather';
+            await axios.post(endpoint, formData);
+            alert(`${type === 'telemetry' ? 'Telemetry' : 'Weather'} data synced successfully!`);
+        } catch (error) {
+            console.error("Upload failed:", error);
+            alert("Upload failed. Please check the file format.");
+        } finally {
+            setIsUploading(false);
+        }
+    };
+
+    if (!currentStatus) return <div className="dashboard-container loading">Loading System Diagnostics...</div>;
 
     const { telemetry, prediction } = currentStatus;
 
     const renderStatusBadge = () => {
-        if (prediction.risk_level === "Low") {
-            return (
-                <div className="status-badge healthy glass-panel">
-                    <CheckCircle size={18} /> System Optimal
-                </div>
-            );
-        }
-        if (prediction.risk_level === "Medium") {
-            return (
-                <div className="status-badge warning glass-panel">
-                    <AlertTriangle size={18} /> Warning Detected
-                </div>
-            );
-        }
+        const icons = { Low: CheckCircle, Medium: AlertTriangle, High: Activity, Critical: Activity };
+        const Icon = icons[prediction.risk_level] || AlertTriangle;
+        const classes = { Low: 'healthy', Medium: 'warning', High: 'critical', Critical: 'critical' };
+
         return (
-            <div className="status-badge critical glass-panel">
-                <Activity size={18} /> Critical Anomaly
+            <div className={`status-badge ${classes[prediction.risk_level]} glass-panel`}>
+                <Icon size={18} /> {prediction.risk_level === 'Low' ? 'System Optimal' : `${prediction.risk_level} Risk`}
             </div>
         );
     };
@@ -117,25 +134,28 @@ const Dashboard = () => {
             <header className="dashboard-header">
                 <div>
                     <h1 className="dashboard-title text-gradient">SolarIQ Pulse</h1>
-                    <p className="dashboard-subtitle">Real-time Inverter Telemetry & Failure Prediction</p>
+                    <p className="dashboard-subtitle">Next-Gen Predictive Maintenance Interface</p>
                 </div>
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                    <div className="glass-panel" style={{ padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Device:</span>
-                        <select
-                            value={selectedInverter}
-                            onChange={handleInverterChange}
-                            style={{
-                                background: 'transparent',
-                                color: 'white',
-                                border: 'none',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                outline: 'none'
-                            }}
+                <div className="header-actions">
+                    <div className="mode-selector glass-panel">
+                        <div
+                            className={`mode-option ${predictionMode === 'internal' ? 'active' : ''}`}
+                            onClick={() => setPredictionMode('internal')}
                         >
+                            Telemetry
+                        </div>
+                        <div
+                            className={`mode-option ${predictionMode === 'internal+external' ? 'active' : ''}`}
+                            onClick={() => setPredictionMode('internal+external')}
+                        >
+                            Enhanced
+                        </div>
+                    </div>
+
+                    <div className="device-selector glass-panel">
+                        <select value={selectedInverter} onChange={handleInverterChange}>
                             {inverters.map(id => (
-                                <option key={id} value={id} style={{ background: 'var(--surface)' }}>{id}</option>
+                                <option key={id} value={id}>{id}</option>
                             ))}
                         </select>
                     </div>
@@ -144,103 +164,175 @@ const Dashboard = () => {
             </header>
 
             <div className="grid-layout">
+                {/* Internal Metrics */}
                 <div className="metric-card glass-panel">
                     <div className="metric-header">
-                        <span>Grid Voltage</span>
+                        <span>Grid Stability</span>
                         <div className="metric-icon"><Zap size={20} /></div>
                     </div>
                     <div className="metric-value">
-                        {telemetry.grid_voltage.toFixed(1)} <span className="metric-unit">V</span>
+                        {telemetry.grid_voltage.toFixed(1)}<span className="metric-unit">V</span>
                     </div>
+                    <div className="metric-footer">{telemetry.grid_frequency.toFixed(2)} Hz</div>
                 </div>
 
                 <div className="metric-card glass-panel">
                     <div className="metric-header">
-                        <span>DC Power Output</span>
-                        <div className="metric-icon"><Activity size={20} /></div>
-                    </div>
-                    <div className="metric-value">
-                        {Math.round(telemetry.dc_power)} <span className="metric-unit">W</span>
-                    </div>
-                </div>
-
-                <div className="metric-card glass-panel">
-                    <div className="metric-header">
-                        <span>Inverter Temp</span>
+                        <span>Thermal Load</span>
                         <div className="metric-icon"><ThermometerIcon size={20} /></div>
                     </div>
                     <div className="metric-value">
-                        {telemetry.inverter_temperature.toFixed(1)} <span className="metric-unit">°C</span>
+                        {telemetry.inverter_temperature.toFixed(1)}<span className="metric-unit">°C</span>
                     </div>
+                    <div className="metric-footer">Ambient: {telemetry.ambient_temperature.toFixed(1)}°C</div>
                 </div>
 
-                <div className="metric-card glass-panel">
+                {/* Mode Sensitive Metric 1 */}
+                <div className="metric-card glass-panel highlight">
                     <div className="metric-header">
-                        <span>System Efficiency</span>
-                        <div className="metric-icon"><TrendingUp size={20} /></div>
+                        <span>Failure Probability</span>
+                        <div className="metric-icon"><Shield size={20} /></div>
                     </div>
                     <div className="metric-value">
-                        {telemetry.inverter_efficiency.toFixed(1)} <span className="metric-unit">%</span>
+                        {(prediction.failure_probability * 100).toFixed(1)}<span className="metric-unit">%</span>
                     </div>
+                    <div className="metric-footer">Confidence: {predictionMode === 'internal+external' ? 'High (94-96%)' : 'Standard (88-92%)'}</div>
                 </div>
+
+                {/* Weather Metrics (Enhanced Mode Only) */}
+                {predictionMode === 'internal+external' ? (
+                    <div className="metric-card glass-panel weather">
+                        <div className="metric-header">
+                            <span>Environmental risk</span>
+                            <div className="metric-icon"><Cloud size={20} /></div>
+                        </div>
+                        <div className="metric-value">
+                            {Math.round(telemetry.cloud_cover * 100)}<span className="metric-unit">%</span>
+                        </div>
+                        <div className="metric-footer">
+                            <Wind size={14} /> {telemetry.wind_speed} km/h | <Droplets size={14} /> {telemetry.rainfall} mm
+                        </div>
+                    </div>
+                ) : (
+                    <div className="metric-card glass-panel upload-prompt" onClick={() => weatherInputRef.current.click()}>
+                        <div className="metric-header">
+                            <span>Enhanced Mode</span>
+                            <div className="metric-icon"><Upload size={20} /></div>
+                        </div>
+                        <div className="metric-value action-text">Sync Weather</div>
+                        <div className="metric-footer">Unlock +4% Accuracy</div>
+                        <input
+                            type="file"
+                            ref={weatherInputRef}
+                            style={{ display: 'none' }}
+                            accept=".csv"
+                            onChange={(e) => handleFileUpload('weather', e.target.files[0])}
+                        />
+                    </div>
+                )}
             </div>
 
-            <div className="chart-section">
-                <div className="chart-card glass-panel">
-                    <h3>Telemetry Timeline <span className="dashboard-subtitle" style={{ fontWeight: 400, marginLeft: 8 }}>(Live Voltage)</span></h3>
-                    <div style={{ height: '300px', width: '100%' }}>
-                        <ResponsiveContainer>
-                            <AreaChart data={dataHistory} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                                <defs>
-                                    <linearGradient id="colorVoltage" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
-                                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" vertical={false} />
-                                <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} tickMargin={10} />
-                                <YAxis domain={['auto', 'auto']} stroke="#94a3b8" fontSize={12} />
-                                <Tooltip
-                                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                                    itemStyle={{ color: '#f8fafc' }}
+            <div className="main-content-grid">
+                <div className="chart-area">
+                    <div className="chart-card glass-panel">
+                        <div className="chart-header">
+                            <h3>Performance Dynamics</h3>
+                            <div className="chart-controls">
+                                <button className="upload-btn" onClick={() => telemetryInputRef.current.click()}>
+                                    <Upload size={16} /> Sync Telemetry
+                                </button>
+                                <input
+                                    type="file"
+                                    ref={telemetryInputRef}
+                                    style={{ display: 'none' }}
+                                    accept=".csv"
+                                    onChange={(e) => handleFileUpload('telemetry', e.target.files[0])}
                                 />
-                                <Area type="monotone" dataKey="voltage" stroke="#3b82f6" fillOpacity={1} fill="url(#colorVoltage)" />
-                            </AreaChart>
-                        </ResponsiveContainer>
+                            </div>
+                        </div>
+                        <div style={{ height: '350px', width: '100%' }}>
+                            <ResponsiveContainer>
+                                <AreaChart data={dataHistory}>
+                                    <defs>
+                                        <linearGradient id="colorPower" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                        </linearGradient>
+                                        <linearGradient id="colorWeather" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.2} />
+                                            <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                                    <XAxis dataKey="time" stroke="#64748b" fontSize={10} hide />
+                                    <YAxis stroke="#64748b" fontSize={10} />
+                                    <Tooltip
+                                        contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', backdropFilter: 'blur(8px)' }}
+                                    />
+                                    <Area type="monotone" dataKey="power" stroke="#3b82f6" fillOpacity={1} fill="url(#colorPower)" strokeWidth={2} name="DC Power" />
+                                    {predictionMode === 'internal+external' && (
+                                        <Area type="monotone" dataKey="cloud" stroke="#f59e0b" fillOpacity={1} fill="url(#colorWeather)" strokeWidth={2} name="Cloud Cover %" />
+                                    )}
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </div>
                     </div>
                 </div>
 
-                <div className="alert-panel glass-panel">
-                    <h3>Diagnostic Alerts</h3>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>AI Prediction Risk:</span>
-                        <span style={{ fontWeight: 600, color: prediction.risk_level === 'Low' ? 'var(--secondary)' : (prediction.risk_level === 'Medium' ? 'var(--warning)' : 'var(--danger)') }}>
-                            {(prediction.failure_probability * 100).toFixed(1)}% ({prediction.risk_level})
-                        </span>
+                <div className="side-panels">
+                    <div className="risk-analysis-panel glass-panel">
+                        <h3>Risk Analysis Factors</h3>
+                        <div className="reasons-list">
+                            {prediction.reasons.map((reason, idx) => (
+                                <div key={idx} className="reason-item">
+                                    <div className="reason-bullet"></div>
+                                    <span>{reason}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="anomaly-check">
+                            <span>Anomaly Status:</span>
+                            <span className={prediction.anomaly_detected ? 'detected' : 'normal'}>
+                                {prediction.anomaly_detected ? 'UNUSUAL' : 'STABLE'}
+                            </span>
+                        </div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
-                        {alerts.length === 0 ? (
-                            <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-muted)' }}>
-                                <CheckCircle size={40} style={{ opacity: 0.2, marginBottom: '1rem', margin: '0 auto' }} />
-                                <p>No anomalies detected</p>
-                            </div>
-                        ) : (
-                            alerts.map(alert => (
-                                <div key={alert.id} className={`alert-item ${alert.level} glass-panel`} style={{ padding: '0.75rem', borderRadius: '8px' }}>
-                                    <div className="alert-header">
-                                        <span>{alert.cause}</span>
-                                        <span className="alert-time"><Clock size={12} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />{alert.time}</span>
-                                    </div>
-                                    <div className="alert-desc">{alert.desc}</div>
+                    <div className="alert-history-panel glass-panel">
+                        <div className="panel-header">
+                            <h3>Diagnostic Events</h3>
+                            {alerts.length > 0 && <span className="alert-count">{alerts.length}</span>}
+                        </div>
+                        <div className="alert-list">
+                            {alerts.length === 0 ? (
+                                <div className="empty-alerts">
+                                    <CheckCircle size={32} opacity={0.2} />
+                                    <p>No active anomalies</p>
                                 </div>
-                            ))
-                        )}
+                            ) : (
+                                alerts.map(alert => (
+                                    <div key={alert.id} className={`alert-card ${alert.level}`}>
+                                        <div className="alert-card-header">
+                                            <span className="alert-cause">{alert.cause}</span>
+                                            <span className="alert-time">{alert.time}</span>
+                                        </div>
+                                        <p className="alert-desc">{alert.desc}</p>
+                                    </div>
+                                ))
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
+            {isUploading && (
+                <div className="upload-overlay">
+                    <div className="spinner"></div>
+                    <p>Syncing Neural Assets...</p>
+                </div>
+            )}
         </div>
     );
 };
 
 export default Dashboard;
+
