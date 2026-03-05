@@ -73,7 +73,7 @@
 /* Metrics Grid */
 .grid-layout {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 1.5rem;
     margin-bottom: 2rem;
 }
@@ -84,6 +84,12 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    min-height: 140px;
+}
+
+.metric-card.section-power {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.05), rgba(5, 150, 105, 0.02));
+    border: 1px solid rgba(16, 185, 129, 0.1);
 }
 
 .metric-card.highlight {

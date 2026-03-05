@@ -187,6 +187,19 @@ const Dashboard = () => {
                     <div className="metric-footer">Ambient: {telemetry.ambient_temperature.toFixed(1)}°C</div>
                 </div>
 
+                <div className="metric-card glass-panel section-power">
+                    <div className="metric-header">
+                        <span>Conversion Performance</span>
+                        <div className="metric-icon"><TrendingUp size={20} /></div>
+                    </div>
+                    <div className="metric-value">
+                        {telemetry.inverter_efficiency.toFixed(1)}<span className="metric-unit">%</span>
+                    </div>
+                    <div className="metric-footer">
+                        Loss: {((telemetry.dc_power - telemetry.ac_power) / 1000).toFixed(2)} kW
+                    </div>
+                </div>
+
                 {/* Mode Sensitive Metric 1 */}
                 <div className="metric-card glass-panel highlight">
                     <div className="metric-header">
