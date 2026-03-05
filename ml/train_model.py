@@ -8,6 +8,9 @@ import json
 import os
 import joblib
 
+# Modular Utilities (Also available in ml_utils.py for backend/future use)
+from ml_utils import merge_external_weather, engineer_weather_risk
+
 # Define feature groups for documentation and interpretability
 ORIGINAL_FEATURES = [
     'ac_power', 'dc_voltage', 'dc_current', 'inverter_temp', 
