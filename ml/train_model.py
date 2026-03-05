@@ -102,16 +102,29 @@ def generate_target_labels(df):
     return df
 
 def train_failure_pipeline():
-    file_path = 'Copy of 54-10-EC-8C-14-69.raws.csv'
+    # Use command line argument if provided, otherwise default
+    import sys
+    file_path = sys.argv[1] if len(sys.argv) > 1 else 'ml/Copy of 54-10-EC-8C-14-69.raws.csv'
+    
     if not os.path.exists(file_path):
-        print(f"Error: Dataset {file_path} not found.")
-        return
+        # Try local path if inside ml/ directory
+        local_path = os.path.basename(file_path)
+        if os.path.exists(local_path):
+            file_path = local_path
+        else:
+            print(f"Error: Dataset {file_path} not found.")
+            return
 
     print(f"Loading data from {file_path}...")
     df_raw = pd.read_csv(file_path)
 
-    # Step 1: Map raw columns to logical names (using available columns in this specific dataset)
-    # This ensures we extract the core signals mentioned in the prompt.
+    # Step 1: Feature Identification & Mapping
+    # Define excluded columns (IDs, targets, timestamps, versioning)
+    exclude_cols = ['_id', 'mac', 'timestamp', 'timestampDate', 'createdAt', 'fromServer', 
+                    'dataLoggerModelId', '__v', 'inverters[0].serial', 'meters[0].serial', 
+                    'inverters[0].id', 'meters[0].id', 'smu[0].id']
+    
+    # Core signal mapping (Maintains logical names for engineered features)
     feature_map = {
         'inverters[0].pv1_power': 'ac_power',
         'inverters[0].pv1_voltage': 'dc_voltage',
@@ -122,52 +135,62 @@ def train_failure_pipeline():
         'meters[0].pf': 'power_factor',
         'inverters[0].kwh_total': 'kwh_total',
         'inverters[0].kwh_today': 'kwh_today',
-        'inverters[0].alarm_code': 'alarm_code',
-        'timestamp': 'timestamp'
+        'inverters[0].alarm_code': 'alarm_code'
     }
-    
-    # Filter columns that exist
-    cols_to_use = [col for col in feature_map.keys() if col in df_raw.columns]
-    df = df_raw[cols_to_use].rename(columns=feature_map)
 
-    # Convert numeric columns to float, coercing errors to NaN
-    # This handles cases where the CSV might have non-numeric placeholders
-    numeric_cols = [
-        'ac_power', 'dc_voltage', 'dc_current', 'inverter_temp', 
-        'grid_voltage', 'grid_frequency', 'power_factor',
-        'kwh_total', 'kwh_today'
-    ]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+    # Identify all potential numeric features (original signals)
+    numeric_df = df_raw.select_dtypes(include=[np.number])
+    original_cols = [col for col in numeric_df.columns if col not in exclude_cols]
+    
+    # Extract original features
+    df = df_raw[original_cols + (['timestamp'] if 'timestamp' in df_raw.columns else [])].copy()
+
+    # Apply mapping for core features (while keeping the rest of the 71 original signals)
+    # Note: If a column is mapped, we rename it; otherwise it keeps its original hardware name.
+    # This fulfills the prompt requirement of using "original features directly coming from hardware".
+    df = df.rename(columns={k: v for k, v in feature_map.items() if k in df.columns})
+
+    # Record the list of original features (some mapped, some raw)
+    # We identify mapped names for documentation
+    actual_original_names = []
+    for col in original_cols:
+        mapped_name = feature_map.get(col, col)
+        actual_original_names.append(mapped_name)
+
+    # Convert all feature columns to numeric, coercing errors to NaN
+    feature_cols = [c for c in df.columns if c != 'timestamp']
+    for col in feature_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # Step 2: Data Cleaning
     print("Cleaning data...")
     df = clean_data(df)
 
     # Step 3: Feature Engineering
-    print("Engineering features...")
+    print("Performing feature engineering...")
     df = feature_engineering(df)
 
     # Step 4: Target Generation
-    print("Generating target labels...")
+    print("Generating failure risk labels...")
     df = generate_target_labels(df)
 
-    # Final feature selection (excluding timestamp and target)
+    # XGBoost Requirement: Sanitize feature names (no [, ], <)
+    # This is critical for columns like inverters[0].temp
+    def sanitize_name(name):
+        return name.replace('[', '_').replace(']', '_').replace('<', '_').replace('>', '_')
+    
+    df.columns = [sanitize_name(c) for c in df.columns]
+    actual_original_names = [sanitize_name(c) for c in actual_original_names]
+
     target = 'failure_risk'
     drop_cols = [target, 'timestamp']
-    if 'alarm_code' in df.columns:
-        drop_cols.append('alarm_code') # Not used as a feature directly if used for label
+    if 'alarm_code' in df.columns: drop_cols.append('alarm_code') # Not used as a feature directly if used for label
         
     X = df.drop(columns=drop_cols)
     y = df[target]
 
     print(f"Dataset summary: {len(X)} samples, {X.shape[1]} features.")
     
-    # Identify engineered vs original for documentation
-    engineered_features = [col for col in X.columns if col not in ORIGINAL_FEATURES]
-    actual_original_features = [col for col in X.columns if col in ORIGINAL_FEATURES]
-
     # Step 5: Model Training with Time-Aware Split
     print("Training XGBoost Classifier...")
     tscv = TimeSeriesSplit(n_splits=5)
@@ -195,15 +218,25 @@ def train_failure_pipeline():
     y_pred = model.predict(X_test)
     y_prob = model.predict_proba(X_test)[:, 1]
     
-    print("\n--- Model Evaluation Results ---")
-    print(f"Accuracy:  {accuracy_score(y_test, y_pred):.4f}")
-    print(f"Precision: {precision_score(y_test, y_pred):.4f}")
-    print(f"Recall:    {recall_score(y_test, y_pred):.4f}")
-    print(f"F1-Score:  {f1_score(y_test, y_pred):.4f}")
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
     try:
-        print(f"ROC-AUC:   {roc_auc_score(y_test, y_prob):.4f}")
+        auc = roc_auc_score(y_test, y_prob)
     except:
-        print("ROC-AUC could not be calculated (possibly only one class in test split).")
+        auc = 0.0
+
+    print("\n--- Model Evaluation Results ---")
+    print(f"Accuracy:  {accuracy:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall:    {recall:.4f}")
+    print(f"F1-Score:  {f1:.4f}")
+    print(f"ROC-AUC:   {auc:.4f}")
+
+    # Identify engineered vs original for documentation
+    engineered_features = [col for col in X.columns if col not in actual_original_names]
+    final_original_features = [col for col in X.columns if col in actual_original_names]
 
     # Step 6: Anomaly Detection (Isolation Forest)
     print("\nTraining Anomaly Detection Layer...")
@@ -212,26 +245,15 @@ def train_failure_pipeline():
 
     # Step 7: Saving Artifacts
     print("\nSaving models and metadata...")
-    model.save_model('solar_failure_model.json')
-    joblib.dump(iso_forest, 'anomaly_model.pkl')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    model.save_model(os.path.join(script_dir, 'solar_failure_model.json'))
+    joblib.dump(iso_forest, os.path.join(script_dir, 'anomaly_model.pkl'))
     
-    metadata = {
-        'original_features': actual_original_features,
-        'engineered_features': engineered_features,
-        'metrics': {
-            'accuracy': accuracy_score(y_test, y_pred),
-            'f1': f1_score(y_test, y_pred)
-        },
-        'system_metadata': {
-            'version': '1.0.0',
-            'note': 'Internal telemetry pipeline'
-        }
-    }
-    
-    with open('feature_meta.json', 'w') as f:
+    metadata_path = os.path.join(script_dir, 'feature_meta.json')
+    with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=4)
         
-    print("Pipeline complete. Models and metadata saved.")
+    print(f"Pipeline complete. Models and metadata saved to {script_dir}.")
 
 if __name__ == "__main__":
     train_failure_pipeline()
