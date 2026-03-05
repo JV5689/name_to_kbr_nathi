@@ -1,0 +1,24 @@
+# Node
+node_modules/
+dist/
+.env
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.stage/
+.pytest_cache/
+
+# ML/Data
+*.csv
+!solar_telemetry_data.csv
+*.json
+!solar_failure_model.json
+!feature_meta.json
+
+# Vite
+vite_error.txt
