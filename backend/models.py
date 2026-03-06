@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict
 from datetime import datetime
 
 class InverterTelemetry(BaseModel):
@@ -11,7 +11,7 @@ class InverterTelemetry(BaseModel):
     inverter_temperature: float
     ambient_temperature: float
     inverter_efficiency: float
-    # External Weather (Mode 2)
+    # External Weather (Mode 2) - Kept for flexibility but defaulted to 0
     cloud_cover: Optional[float] = 0.0
     rainfall: Optional[float] = 0.0
     wind_speed: Optional[float] = 0.0
@@ -37,4 +37,18 @@ class PredictionResponse(BaseModel):
     reasons: List[str]
     root_cause: Optional[str]
     maintenance_recommendation: Optional[str]
+    # Trend and AI Insights
+    trend_analysis: Optional[dict] = None
+    ai_analysis: Optional[str] = None
+
+class AppSettings(BaseModel):
+    gemini_api_key: str = ""
+    trend_window_hours: int = 48
+    refresh_rate_ms: int = 2500
+    risk_thresholds: Dict[str, float] = {
+        "Medium": 0.5,
+        "High": 0.8,
+        "Critical": 0.95
+    }
+    simulation_speed: float = 1.0
 

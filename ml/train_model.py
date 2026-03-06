@@ -249,6 +249,22 @@ def train_failure_pipeline():
     model.save_model(os.path.join(script_dir, 'solar_failure_model.json'))
     joblib.dump(iso_forest, os.path.join(script_dir, 'anomaly_model.pkl'))
     
+    metadata = {
+        'original_features': final_original_features,
+        'engineered_features': engineered_features,
+        'metrics': {
+            'accuracy': float(accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'auc_roc': float(auc)
+        },
+        'system_metadata': {
+            'total_features': int(X.shape[1]),
+            'training_samples': int(len(X))
+        }
+    }
+    
     metadata_path = os.path.join(script_dir, 'feature_meta.json')
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=4)
