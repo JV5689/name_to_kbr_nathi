@@ -1,6 +1,10 @@
 fastapi
 uvicorn
 pydantic
-xgboost
+google-generativeai
+aiohttp
 pandas
-numpy
+xgboost
+joblib
+python-multipart
+scikit-learn
